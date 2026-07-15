@@ -244,12 +244,14 @@ bash inference/start_server.sh   # action_norm_stats.npz is picked up from the s
 ## Citation
 
 ```bibtex
-@article{flowwam,
-  title   = {FlowWAM: A Dual-Stream RGB + Optical-Flow World Action Model for RoboTwin},
-  author  = {TODO},
-  journal = {arXiv preprint arXiv:XXXX.XXXXX},
-  year    = {2026},
-  url     = {https://arxiv.org/abs/XXXX.XXXXX}
+@misc{flowwam,
+      title={FlowWAM: Optical Flow as a Unified Action Representation for World Action Models}, 
+      author={Yixiang Chen and Peiyan Li and Yuan Xu and Qisen Ma and Jiabing Yang and Kai Wang and Jianhua Yang and Dong An and He Guan and Gaoteng Liu and Jianlou Si and Jun Huang and Jing Liu and Nianfeng Liu and Yan Huang and Liang Wang},
+      year={2026},
+      eprint={2607.13017},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2607.13017}, 
 }
 ```
 
