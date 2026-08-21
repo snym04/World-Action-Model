@@ -1031,6 +1031,7 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             "betas": [0.9, 0.95], "lr_scheduler_type": getattr(args, "lr_scheduler_type", "cosine"),
             "lr_warmup_ratio": getattr(args, "lr_warmup_ratio", 0.05),
             "lr_total_steps": total_steps, "lr_warmup_steps": warmup_steps,
+            "wam_run_id": os.environ.get("WAM_RUN_ID", ""),
             "seed": args.seed,
             "num_epochs": num_epochs, "start_epoch": start_epoch,
             "gradient_accumulation_steps": grad_accum,
@@ -1059,10 +1060,15 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         # id priority: env SWANLAB_RESUME_ID > persisted id file (only for a
         # true resume via resume_state_dir). resume="allow" attaches if the run
         # exists, else creates one with that id.
+        _default_project = f"flowwam-{args.dataset_type}-idm"
         _sw_init = dict(
-            project=f"flowwam-{args.dataset_type}-idm",
+            project=os.environ.get("SWANLAB_PROJECT", "").strip()
+                    or _default_project,
             config=training_config,
         )
+        _sw_name = os.environ.get("SWANLAB_EXP_NAME", "").strip()
+        if _sw_name:
+            _sw_init["name"] = _sw_name
         _rid_file = os.path.join(model_logger.output_path, "swanlab_run_id.txt")
         _sw_resume_id = os.environ.get("SWANLAB_RESUME_ID", "").strip()
         if not _sw_resume_id and resume_state_dir and os.path.exists(_rid_file):
