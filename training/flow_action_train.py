@@ -932,7 +932,7 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
     """
     import swanlab
     from accelerate import Accelerator
-    from accelerate.utils import DistributedDataParallelKwargs
+    from accelerate.utils import DistributedDataParallelKwargs, set_seed
 
     lr = args.learning_rate
     weight_decay = args.weight_decay
@@ -976,6 +976,11 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         kwargs_handlers=[DistributedDataParallelKwargs(
             find_unused_parameters=find_unused)],
     )
+
+    # ``device_specific=True`` needs an initialized AcceleratorState. Keep the
+    # identical pre-model seed in ``__main__`` so every rank constructs the
+    # same parameters, then switch runtime RNGs to deterministic per-rank seeds.
+    set_seed(args.seed, device_specific=True)
 
     # The dataloader here is the GLOBAL batch stream, so per-process optimizer
     # steps/epoch = ceil(len(dataloader) / (num_processes * grad_accum)). The
@@ -1257,7 +1262,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     from accelerate.utils import set_seed
-    set_seed(args.seed, device_specific=True)
+    # Seed before dataset/model construction. Per-rank seeding is applied only
+    # after ``Accelerator()`` initializes its process state inside the training
+    # function.
+    set_seed(args.seed)
 
     rank = int(os.environ.get("RANK", 0))
     if args.action_norm_path is not None:

@@ -1,3 +1,4 @@
+import ast
 import os
 import random
 import sys
@@ -115,3 +116,29 @@ def test_training_module_to_keeps_pipeline_device_in_sync():
 
     assert module.pipe.weight.device.type == "cpu"
     assert module.pipe.device == torch.device("cpu")
+
+
+def test_device_specific_seed_happens_after_accelerator_init():
+    source_path = os.path.join(REPO_ROOT, "training", "flow_action_train.py")
+    with open(source_path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+
+    launch = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "launch_training_task"
+    )
+    accelerator_line = next(
+        node.lineno for node in ast.walk(launch)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Accelerator"
+    )
+    device_seed_line = next(
+        node.lineno for node in ast.walk(launch)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "set_seed"
+        and any(keyword.arg == "device_specific" for keyword in node.keywords)
+    )
+    assert device_seed_line > accelerator_line
