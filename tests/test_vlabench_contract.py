@@ -155,3 +155,29 @@ def test_swanlab_manifest_env_is_consumed_before_sdk_settings(monkeypatch):
     assert name == "manifest-bound-name"
     assert "SWANLAB_PROJECT" not in os.environ
     assert "SWANLAB_EXP_NAME" not in os.environ
+
+
+def test_full_state_is_saved_after_scheduler_step():
+    source_path = os.path.join(REPO_ROOT, "training", "flow_action_train.py")
+    with open(source_path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    launch = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "launch_training_task"
+    )
+    scheduler_line = next(
+        node.lineno for node in ast.walk(launch)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "scheduler"
+        and node.func.attr == "step"
+    )
+    state_save_line = next(
+        node.lineno for node in ast.walk(launch)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_save_full_state"
+    )
+    assert scheduler_line < state_save_line

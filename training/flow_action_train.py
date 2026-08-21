@@ -1120,12 +1120,12 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
                 accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 model_logger.on_step_end(accelerator, model, save_steps)
-                # Save the FULL resumable state at the same cadence as weights.
+                if accelerator.sync_gradients:
+                    scheduler.step()
+                # Persist the post-step LR so an exact resume cannot repeat it.
                 if full_state_keep > 0 and save_steps and model_logger.num_steps % save_steps == 0:
                     _save_full_state(accelerator, model_logger.output_path,
                                      model_logger.num_steps, full_state_keep)
-                if accelerator.sync_gradients:
-                    scheduler.step()
                 if accelerator.is_main_process:
                     swanlab.log({
                         "loss": loss.item(),
