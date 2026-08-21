@@ -17,7 +17,10 @@ from dataset_action_vlabench import (  # noqa: E402
     VLABenchActionFlowDataset,
     _trajectory_to_actions,
 )
-from flow_action_train import FlowActionTrainingModule  # noqa: E402
+from flow_action_train import (  # noqa: E402
+    FlowActionTrainingModule,
+    _consume_swanlab_manifest_env,
+)
 from vlabench_policy import FlowWAMVLABenchPolicy  # noqa: E402
 
 
@@ -142,3 +145,13 @@ def test_device_specific_seed_happens_after_accelerator_init():
         and any(keyword.arg == "device_specific" for keyword in node.keywords)
     )
     assert device_seed_line > accelerator_line
+
+
+def test_swanlab_manifest_env_is_consumed_before_sdk_settings(monkeypatch):
+    monkeypatch.setenv("SWANLAB_PROJECT", "flowwam-vlabench-idm")
+    monkeypatch.setenv("SWANLAB_EXP_NAME", "manifest-bound-name")
+    project, name = _consume_swanlab_manifest_env("fallback")
+    assert project == "flowwam-vlabench-idm"
+    assert name == "manifest-bound-name"
+    assert "SWANLAB_PROJECT" not in os.environ
+    assert "SWANLAB_EXP_NAME" not in os.environ

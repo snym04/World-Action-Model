@@ -924,6 +924,13 @@ def _save_full_state(accelerator, output_path, step, keep):
     accelerator.wait_for_everyone()
 
 
+def _consume_swanlab_manifest_env(default_project):
+    """Consume runner metadata before SwanLab's Settings parses its env."""
+    project = os.environ.pop("SWANLAB_PROJECT", "").strip() or default_project
+    experiment_name = os.environ.pop("SWANLAB_EXP_NAME", "").strip()
+    return project, experiment_name
+
+
 def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None):
     """Training loop: AdamW(betas=0.9,0.95) + linear-warmup cosine LR, grad clip 1.0.
 
@@ -1066,12 +1073,11 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         # true resume via resume_state_dir). resume="allow" attaches if the run
         # exists, else creates one with that id.
         _default_project = f"flowwam-{args.dataset_type}-idm"
+        _sw_project, _sw_name = _consume_swanlab_manifest_env(_default_project)
         _sw_init = dict(
-            project=os.environ.get("SWANLAB_PROJECT", "").strip()
-                    or _default_project,
+            project=_sw_project,
             config=training_config,
         )
-        _sw_name = os.environ.get("SWANLAB_EXP_NAME", "").strip()
         if _sw_name:
             _sw_init["name"] = _sw_name
         _rid_file = os.path.join(model_logger.output_path, "swanlab_run_id.txt")
