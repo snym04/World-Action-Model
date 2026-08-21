@@ -106,6 +106,7 @@ LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-1000}"
 LR_MAX_STEPS="${LR_MAX_STEPS:-0}"
 
 # ---- Reproducible outputs and resume ----
+SEED="${SEED:-42}"
 OUTPUT_PATH="${OUTPUT_PATH:?set OUTPUT_PATH to the manifest-bound run directory}"
 ACTION_NORM_PATH="${OUTPUT_PATH}/action_norm_stats.npz"
 SAVE_STEPS="${SAVE_STEPS:-2000}"
@@ -124,6 +125,7 @@ echo "========== FlowWAM VLABench Training =========="
 echo "  machines/gpus:   ${NUM_MACHINES} x ${NUM_GPUS}"
 echo "  frames:          action=${NUM_FRAMES} video=${NUM_VIDEO_FRAMES} stride=${VISUAL_STRIDE}"
 echo "  batch/lr:        ${BATCH_SIZE} / ${LEARNING_RATE}"
+echo "  seed:            ${SEED}"
 echo "  tasks/cameras:   ${#TASK_NAMES[@]} / ${CAMERAS[*]}"
 echo "  output:          ${OUTPUT_PATH}"
 echo "================================================"
@@ -133,6 +135,7 @@ cd "${SCRIPT_DIR}"
   ${ACCELERATE_ARGS} \
   "${SCRIPT_DIR}/flow_action_train.py" \
   --dataset_type vlabench \
+  --seed "${SEED}" \
   --dataset_base_path "${DATASET_BASE_PATH}" \
   --task_names "${TASK_NAMES[@]}" \
   --num_frames "${NUM_FRAMES}" \

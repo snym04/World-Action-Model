@@ -1031,6 +1031,7 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             "betas": [0.9, 0.95], "lr_scheduler_type": getattr(args, "lr_scheduler_type", "cosine"),
             "lr_warmup_ratio": getattr(args, "lr_warmup_ratio", 0.05),
             "lr_total_steps": total_steps, "lr_warmup_steps": warmup_steps,
+            "seed": args.seed,
             "num_epochs": num_epochs, "start_epoch": start_epoch,
             "gradient_accumulation_steps": grad_accum,
             "num_frames": args.num_frames, "batch_size": args.batch_size,
@@ -1147,6 +1148,7 @@ def _build_parser():
     parser.add_argument("--dataset_type", type=str, default="robotwin",
                         choices=["robotwin", "vlabench"])
     parser.add_argument("--gripper_open_threshold", type=float, default=0.03)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_gradient_checkpointing", default=False, action="store_true")
     parser.add_argument("--task_names", type=str, nargs="*", default=None)
     parser.add_argument("--size", type=int, nargs=2, default=[320, 256], metavar=("WIDTH", "HEIGHT"))
@@ -1247,6 +1249,9 @@ def _build_parser():
 if __name__ == "__main__":
     parser = _build_parser()
     args = parser.parse_args()
+
+    from accelerate.utils import set_seed
+    set_seed(args.seed, device_specific=True)
 
     rank = int(os.environ.get("RANK", 0))
     if args.action_norm_path is not None:
