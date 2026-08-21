@@ -129,6 +129,7 @@ def rollout_and_predict_actions(
     seed: int = 1,
     video_save_path: Optional[str] = None,
     cached_text: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    camera_prefix: str = RoboTwinActionFlowDataset.CAMERA_PREFIX,
 ) -> Tuple[np.ndarray, Tuple[torch.Tensor, torch.Tensor]]:
     vae_z_dim = getattr(pipe.vae, "z_dim", 16)
     w, h = size
@@ -160,7 +161,6 @@ def rollout_and_predict_actions(
     flow_h, flow_w = tiled_h, tiled_w
 
     # ---- Text ----
-    camera_prefix = RoboTwinActionFlowDataset.CAMERA_PREFIX
     video_prompt = camera_prefix + instruction
     if cached_text is not None:
         context, action_context = cached_text
@@ -304,6 +304,7 @@ class ConnectionState:
                  num_frames, num_video_frames, size, action_dim, action_snr_shift,
                  action_inference_steps, action_chunk_size, video_inference_steps,
                  sigma_shift, action_cond_sigma=0.0, cond_layer_stride=1,
+                 camera_prefix=RoboTwinActionFlowDataset.CAMERA_PREFIX,
                  video_save_dir=None, save_videos_mode="off", save_videos_every=20,
                  server_id=None):
         self.pipe = pipe
@@ -322,6 +323,7 @@ class ConnectionState:
         self.sigma_shift = sigma_shift
         self.action_cond_sigma = action_cond_sigma
         self.cond_layer_stride = cond_layer_stride
+        self.camera_prefix = camera_prefix
         self.video_save_dir = video_save_dir
         self.save_videos_mode = save_videos_mode
         self.save_videos_every = max(1, int(save_videos_every))
@@ -384,6 +386,7 @@ class ConnectionState:
             cond_layer_stride=self.cond_layer_stride,
             video_save_path=video_save_path,
             cached_text=cached_text,
+            camera_prefix=self.camera_prefix,
         )
         if cached_text is None and fresh_text is not None:
             self._text_cache[instruction] = fresh_text
@@ -401,6 +404,7 @@ class FlowActionServer:
             "action_dim": state_kwargs["action_dim"],
             "num_frames": state_kwargs["num_frames"],
             "cameras": state_kwargs["cameras"],
+            "camera_prefix": state_kwargs["camera_prefix"],
             "action_chunk_size": state_kwargs["action_chunk_size"],
             "video_inference_steps": state_kwargs["video_inference_steps"],
             "action_inference_steps": state_kwargs["action_inference_steps"],
@@ -471,6 +475,9 @@ def parse_args():
                    choices=["text", "state_token"])
     p.add_argument("--cameras", type=str, nargs="+",
                    default=["head_camera", "left_camera", "right_camera"])
+    p.add_argument("--camera_prefix", type=str,
+                   default=RoboTwinActionFlowDataset.CAMERA_PREFIX,
+                   help="Camera-layout prompt prefix; must match training.")
     p.add_argument("--text_context_dim", type=int, default=4096)
     p.add_argument("--size", type=int, nargs=2, default=[320, 256], metavar=("W", "H"))
     p.add_argument("--video_inference_steps", type=int, default=25)
@@ -550,6 +557,7 @@ def main():
         action_inference_steps=args.action_inference_steps, action_chunk_size=chunk_size,
         video_inference_steps=args.video_inference_steps, sigma_shift=args.sigma_shift,
         action_cond_sigma=args.action_cond_sigma, cond_layer_stride=args.cond_layer_stride,
+        camera_prefix=args.camera_prefix,
         video_save_dir=video_save_dir, save_videos_mode=args.save_videos_mode,
         save_videos_every=args.save_videos_every, server_id=args.server_id,
     )

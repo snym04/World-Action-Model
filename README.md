@@ -11,9 +11,12 @@
 
 **TL;DR:** World Action Models repurpose pretrained video generators for control, yet a modality gap persists: action signals must conform to the generator's visual priors while preserving the dense cross-frame motion that control requires. FlowWAM closes this gap with optical flow, a unified, video-native action representation that shares the RGB format, encodes spatially grounded per-pixel displacement, and is extractable from action-unlabeled video. A single shared dual-stream diffusion model generates flow for action prediction, conditions on flow for world modeling, and pretrains on large-scale unlabeled video.
 
+> VLABench baseline：本仓库新增了官方 10-task primitive 数据与 Track-1 评测适配；固定协议、文件关系、训练和评测命令见 [VLABENCH.md](VLABENCH.md)。
+
 ## Contents
 
 - [Repository Layout](#repository-layout)
+- [VLABench Baseline](VLABENCH.md)
 - [Installation](#installation)
 - [Inference (RoboTwin Evaluation)](#inference-robotwin-evaluation)
 - [Training](#training)
@@ -254,4 +257,3 @@ bash inference/start_server.sh   # action_norm_stats.npz is picked up from the s
       url={https://arxiv.org/abs/2607.13017}, 
 }
 ```
-

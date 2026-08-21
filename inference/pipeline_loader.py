@@ -92,6 +92,7 @@ def build_pipeline(
                 local_model_path=local_model_path,
             ),
         ],
+        redirect_common_files=False,
         tokenizer_config=ModelConfig(
             model_id="Wan-AI/Wan2.1-T2V-1.3B",
             origin_file_pattern="google/*",

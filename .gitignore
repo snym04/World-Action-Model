@@ -51,8 +51,8 @@ env/
 venv/
 
 # ===== Model / output directories =====
-training/models/
-inference/models/
+training/models
+inference/models
 inference/robotwin_policy/eval_result/
 
 temp/

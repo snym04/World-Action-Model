@@ -46,6 +46,7 @@ from diffsynth import load_state_dict
 from action_dit import build_action_expert_idm
 from dual_stream_capture import capture_video_layer_features, concat_layer_feats
 from dataset_action_robotwin import RoboTwinActionFlowDataset
+from dataset_action_vlabench import VLABenchActionFlowDataset
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
@@ -247,6 +248,7 @@ class FlowActionTrainingModule(DiffusionTrainingModule):
             torch_dtype=torch.bfloat16, device="cpu",
             model_configs=model_configs,
             audio_processor_config=audio_processor_config,
+            redirect_common_files=False,
         )
 
         self.vae_z_dim = getattr(self.pipe.vae, "z_dim", 16)
@@ -327,6 +329,24 @@ class FlowActionTrainingModule(DiffusionTrainingModule):
             missing, unexpected = self.action_expert.load_state_dict(action_keys, strict=False)
             loaded = len(action_keys) - len(unexpected)
             print(f"[ActionExpertIDM] Loaded {loaded} keys from {action_expert_checkpoint}")
+
+    def to(self, *args, **kwargs):
+        """Keep pipeline placement metadata aligned with module parameters.
+
+        ``Accelerator.prepare`` moves this module after the pipeline was loaded
+        on CPU. ``nn.Module.to`` moves the registered child parameters but does
+        not update ``BasePipeline.device``; preprocessing would otherwise create
+        VAE/text tensors on CPU while the corresponding modules are on CUDA.
+        """
+        super().to(*args, **kwargs)
+        device = kwargs.get("device")
+        if device is None and args:
+            candidate = args[0]
+            if isinstance(candidate, (str, torch.device)):
+                device = candidate
+        if device is not None:
+            self.pipe.device = torch.device(device)
+        return self
 
     def _load_resume_checkpoint(self, ckpt_path):
         """Warm-start the video DiT + flow_stream; load action keys only when
@@ -1014,6 +1034,10 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             "num_epochs": num_epochs, "start_epoch": start_epoch,
             "gradient_accumulation_steps": grad_accum,
             "num_frames": args.num_frames, "batch_size": args.batch_size,
+            "dataset_type": args.dataset_type,
+            "dataset_base_path": args.dataset_base_path,
+            "cameras": args.cameras, "visual_stride": args.visual_stride,
+            "action_dim": args.action_dim,
             "flow_loss_weight": args.flow_loss_weight,
             "action_loss_weight": args.action_loss_weight,
             "action_snr_shift": args.action_snr_shift,
@@ -1034,7 +1058,10 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         # id priority: env SWANLAB_RESUME_ID > persisted id file (only for a
         # true resume via resume_state_dir). resume="allow" attaches if the run
         # exists, else creates one with that id.
-        _sw_init = dict(project="flowwam-robotwin-idm", config=training_config)
+        _sw_init = dict(
+            project=f"flowwam-{args.dataset_type}-idm",
+            config=training_config,
+        )
         _rid_file = os.path.join(model_logger.output_path, "swanlab_run_id.txt")
         _sw_resume_id = os.environ.get("SWANLAB_RESUME_ID", "").strip()
         if not _sw_resume_id and resume_state_dir and os.path.exists(_rid_file):
@@ -1117,6 +1144,9 @@ def parse_start_epoch(resume_checkpoint):
 
 def _build_parser():
     parser = wan_parser()
+    parser.add_argument("--dataset_type", type=str, default="robotwin",
+                        choices=["robotwin", "vlabench"])
+    parser.add_argument("--gripper_open_threshold", type=float, default=0.03)
     parser.add_argument("--use_gradient_checkpointing", default=False, action="store_true")
     parser.add_argument("--task_names", type=str, nargs="*", default=None)
     parser.add_argument("--size", type=int, nargs=2, default=[320, 256], metavar=("WIDTH", "HEIGHT"))
@@ -1223,9 +1253,16 @@ if __name__ == "__main__":
         sentinel = args.action_norm_path + ".ready"
         if not os.path.exists(sentinel):
             if rank == 0:
-                from dataset_action_robotwin import compute_global_action_norm_stats
-                norm_stats = compute_global_action_norm_stats(
-                    args.dataset_base_path, args.variants, args.task_names)
+                if args.dataset_type == "vlabench":
+                    from dataset_action_vlabench import compute_vlabench_action_norm_stats
+                    norm_stats = compute_vlabench_action_norm_stats(
+                        args.dataset_base_path, args.task_names,
+                        args.gripper_open_threshold,
+                    )
+                else:
+                    from dataset_action_robotwin import compute_global_action_norm_stats
+                    norm_stats = compute_global_action_norm_stats(
+                        args.dataset_base_path, args.variants, args.task_names)
                 os.makedirs(os.path.dirname(args.action_norm_path), exist_ok=True)
                 norm_stats.save(args.action_norm_path)
                 with open(sentinel, "w") as f:
@@ -1236,24 +1273,45 @@ if __name__ == "__main__":
                 while not os.path.exists(sentinel):
                     time.sleep(1)
 
-    dataset = RoboTwinActionFlowDataset(
-        data_root=args.dataset_base_path,
-        variants=args.variants,
-        cameras=args.cameras,
-        size=tuple(args.size),
-        num_frames=args.num_frames,
-        num_video_frames=args.num_video_frames,
-        visual_stride=args.visual_stride,
-        task_names=args.task_names,
-        flow_method=args.flow_method,
-        flow_device=args.flow_device,
-        flow_max_magnitude=args.flow_max_magnitude,
-        flow_mode=args.flow_mode,
-        action_norm_path=args.action_norm_path,
-        load_from_cache=args.load_from_cache,
-        cache_root=args.cache_root,
-        cache_episode_lru_size=args.cache_episode_lru_size,
-    )
+    if args.dataset_type == "vlabench":
+        if args.load_from_cache:
+            raise ValueError("VLABench latent-cache mode is not implemented")
+        if args.action_dim != 7:
+            raise ValueError("VLABench requires --action_dim 7")
+        dataset = VLABenchActionFlowDataset(
+            data_root=args.dataset_base_path,
+            cameras=args.cameras,
+            size=tuple(args.size),
+            num_frames=args.num_frames,
+            num_video_frames=args.num_video_frames,
+            visual_stride=args.visual_stride,
+            task_names=args.task_names,
+            flow_method=args.flow_method,
+            flow_device=args.flow_device,
+            flow_max_magnitude=args.flow_max_magnitude,
+            flow_mode=args.flow_mode,
+            action_norm_path=args.action_norm_path,
+            gripper_open_threshold=args.gripper_open_threshold,
+        )
+    else:
+        dataset = RoboTwinActionFlowDataset(
+            data_root=args.dataset_base_path,
+            variants=args.variants,
+            cameras=args.cameras,
+            size=tuple(args.size),
+            num_frames=args.num_frames,
+            num_video_frames=args.num_video_frames,
+            visual_stride=args.visual_stride,
+            task_names=args.task_names,
+            flow_method=args.flow_method,
+            flow_device=args.flow_device,
+            flow_max_magnitude=args.flow_max_magnitude,
+            flow_mode=args.flow_mode,
+            action_norm_path=args.action_norm_path,
+            load_from_cache=args.load_from_cache,
+            cache_root=args.cache_root,
+            cache_episode_lru_size=args.cache_episode_lru_size,
+        )
 
     model = FlowActionTrainingModule(
         model_paths=args.model_paths,
