@@ -178,6 +178,6 @@ def test_full_state_is_saved_after_scheduler_step():
         node.lineno for node in ast.walk(launch)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id == "_save_full_state"
+        and node.func.id == "save_training_state"
     )
     assert scheduler_line < state_save_line
