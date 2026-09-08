@@ -84,6 +84,7 @@ FLOW_MOTION_BOOST=2.0
 # ---- Original FlowWAM optimization / IDM settings ----
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 NUM_EPOCHS="${NUM_EPOCHS:-5}"
+MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-0}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 TRAINABLE_MODELS=dit
@@ -144,6 +145,7 @@ cd "${SCRIPT_DIR}"
   --model_id_with_origin_paths "${MODEL_PATHS}" \
   --learning_rate "${LEARNING_RATE}" \
   --num_epochs "${NUM_EPOCHS}" \
+  --max_train_steps "${MAX_TRAIN_STEPS}" \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "${OUTPUT_PATH}" \
   --size "${SIZE_W}" "${SIZE_H}" \

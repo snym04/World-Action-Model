@@ -900,7 +900,7 @@ def _build_lr_scheduler(optimizer, scheduler_type, total_steps, warmup_steps, ba
     return SequentialLR(optimizer, schedulers=[warmup, main], milestones=[warmup_steps])
 
 
-def _save_full_state(accelerator, output_path, step, keep):
+def _save_full_state(accelerator, output_path, step, keep, trainer_state=None):
     """Save FULL training state (model + optimizer + scheduler + RNG) via
     accelerator.save_state, plus a trainer_state.json with the global step, so
     training can be resumed exactly (optimizer momentum + LR schedule + step),
@@ -913,7 +913,7 @@ def _save_full_state(accelerator, output_path, step, keep):
     accelerator.save_state(state_dir)
     if accelerator.is_main_process:
         with open(os.path.join(state_dir, "trainer_state.json"), "w") as f:
-            json.dump({"global_step": int(step)}, f)
+            json.dump(trainer_state or {"global_step": int(step)}, f)
         if keep > 0:
             dirs = sorted(
                 [d for d in _glob.glob(os.path.join(state_root, "step-*")) if os.path.isdir(d)],
@@ -946,6 +946,9 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
     num_workers = args.dataset_num_workers
     save_steps = args.save_steps
     num_epochs = args.num_epochs
+    max_train_steps = int(getattr(args, "max_train_steps", 0))
+    if max_train_steps < 0:
+        raise ValueError("max_train_steps must be nonnegative")
     grad_accum = args.gradient_accumulation_steps
     find_unused = args.find_unused_parameters
     save_every_n_epochs = getattr(args, "save_every_n_epochs", 1)
@@ -958,6 +961,7 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
     cache_episode_batching = bool(
         args.load_from_cache and getattr(args, "cache_episode_batching", False)
     )
+    shuffle_generator = torch.Generator().manual_seed(args.seed)
     if cache_episode_batching:
         batch_sampler = EpisodeAwareCacheBatchSampler(
             dataset, batch_size=args.batch_size,
@@ -971,7 +975,7 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         )
     else:
         dataloader = DataLoader(
-            dataset, shuffle=True, batch_size=args.batch_size,
+            dataset, shuffle=True, batch_size=args.batch_size, generator=shuffle_generator,
             collate_fn=dual_stream_action_collate_fn, num_workers=num_workers,
         )
 
@@ -998,6 +1002,8 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         math.ceil(len(dataloader) / (num_processes * max(grad_accum, 1))), 1)
     if getattr(args, "lr_max_steps", 0):
         total_steps = int(args.lr_max_steps)
+    elif max_train_steps:
+        total_steps = max_train_steps
     else:
         total_steps = max(opt_steps_per_epoch * num_epochs, 1)
     # Absolute --lr_warmup_steps (>0) takes precedence over the ratio.
@@ -1018,24 +1024,43 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
     from accelerate import skip_first_batches
     full_state_keep = int(getattr(args, "full_state_keep", 2))
     resume_state_dir = getattr(args, "resume_state_dir", None)
+    if not len(dataloader):
+        raise ValueError("Empty training loader")
+    if max_train_steps:
+        num_epochs = math.ceil(max_train_steps / max(math.ceil(len(dataloader) / grad_accum), 1))
     skip_batches = 0
+    global_step = start_epoch * math.ceil(len(dataloader) / grad_accum)
+    micro_step = start_epoch * len(dataloader)
     if resume_state_dir:
-        accelerator.load_state(resume_state_dir)
-        ts_path = os.path.join(resume_state_dir, "trainer_state.json")
-        if os.path.exists(ts_path):
-            with open(ts_path) as f:
-                global_step = int(json.load(f)["global_step"])
+        # Read/validate metadata before touching model or optimizer state.
+        with open(os.path.join(resume_state_dir, "trainer_state.json")) as f:
+            state = json.load(f)
+        if state.get("schema_version") == 2:
+            for key, value in {"world_size": num_processes, "grad_accum": grad_accum,
+                               "batch_size": args.batch_size, "batches_per_epoch": len(dataloader),
+                               "lr_total_steps": total_steps}.items():
+                if state[key] != value:
+                    raise ValueError(f"Resume contract mismatch for {key}: {state[key]} != {value}")
+            global_step = int(state["global_step"])
+            micro_step = int(state["micro_step"])
         else:
-            global_step = 0
-        start_epoch = global_step // max(len(dataloader), 1)
-        skip_batches = global_step % max(len(dataloader), 1)
-        model_logger.num_steps = global_step
+            if grad_accum != 1:
+                raise ValueError("Legacy checkpoint has no accumulation cursor; resume with grad_accum=1")
+            global_step = micro_step = int(state["global_step"])
+        start_epoch, skip_batches = divmod(micro_step, len(dataloader))
+        accelerator.load_state(resume_state_dir)
         if accelerator.is_main_process:
-            print(f"[Resume-STATE] loaded {resume_state_dir}: global_step={global_step}, "
-                  f"start_epoch={start_epoch}, skip_batches={skip_batches} "
-                  f"(optimizer + LR scheduler restored; NO re-warmup)")
-    else:
-        global_step = start_epoch * len(dataloader)
+            print(f"[Resume-STATE] optimizer_step={global_step}, micro_step={micro_step}, "
+                  f"start_epoch={start_epoch}, skip_batches={skip_batches}")
+    model_logger.num_steps = global_step
+
+    def save_training_state():
+        _save_full_state(accelerator, model_logger.output_path, global_step, full_state_keep,
+                         trainer_state={"schema_version": 2, "global_step": global_step,
+                                        "micro_step": micro_step, "world_size": num_processes,
+                                        "grad_accum": grad_accum, "batch_size": args.batch_size,
+                                        "batches_per_epoch": len(dataloader),
+                                        "lr_total_steps": total_steps})
 
     if accelerator.is_main_process:
         training_config = {
@@ -1046,6 +1071,9 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             "wam_run_id": os.environ.get("WAM_RUN_ID", ""),
             "seed": args.seed,
             "num_epochs": num_epochs, "start_epoch": start_epoch,
+            "max_train_steps": max_train_steps, "step_unit": "optimizer_update",
+            "effective_global_batch_size": args.batch_size * num_processes * grad_accum,
+            "epoch_tail_batch_may_be_smaller": len(dataloader) % grad_accum != 0,
             "gradient_accumulation_steps": grad_accum,
             "num_frames": args.num_frames, "batch_size": args.batch_size,
             "dataset_type": args.dataset_type,
@@ -1102,7 +1130,16 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         print(f"[Train] batches/epoch={len(dataloader)}, lr_total_steps={total_steps}, "
               f"warmup={warmup_steps}, scheduler={getattr(args, 'lr_scheduler_type', 'cosine')}")
 
-    for epoch_id in range(start_epoch, num_epochs):
+    optimizer.zero_grad()
+    last_state_step = global_step if resume_state_dir else -1
+    from itertools import count
+    epoch_ids = count(start_epoch) if max_train_steps else range(start_epoch, num_epochs)
+    for epoch_id in epoch_ids:
+        if max_train_steps and global_step >= max_train_steps:
+            break
+        shuffle_generator.manual_seed(args.seed + epoch_id)
+        if hasattr(dataloader, "set_epoch"):
+            dataloader.set_epoch(epoch_id)
         # Re-seed the per-epoch shuffle to the ABSOLUTE epoch index so a resumed
         # run reproduces the same batch order this epoch used originally
         # (EpisodeAwareCacheBatchSampler keys its RNG off seed+epoch).
@@ -1113,19 +1150,22 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             active_loader = skip_first_batches(dataloader, skip_batches)
         for data in tqdm(active_loader, desc=f"Epoch {epoch_id}"):
             with accelerator.accumulate(model):
-                optimizer.zero_grad()
                 loss_dict = model(data)
                 loss = loss_dict["loss"]
                 accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                model_logger.on_step_end(accelerator, model, save_steps)
                 if accelerator.sync_gradients:
-                    scheduler.step()
-                # Persist the post-step LR so an exact resume cannot repeat it.
-                if full_state_keep > 0 and save_steps and model_logger.num_steps % save_steps == 0:
-                    _save_full_state(accelerator, model_logger.output_path,
-                                     model_logger.num_steps, full_state_keep)
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                micro_step += 1
+                if not accelerator.sync_gradients or accelerator.optimizer_step_was_skipped:
+                    continue
+                scheduler.step()
+                global_step += 1
+                model_logger.on_step_end(accelerator, model, save_steps)
+                if full_state_keep > 0 and save_steps and global_step % save_steps == 0:
+                    save_training_state()
+                    last_state_step = global_step
                 if accelerator.is_main_process:
                     swanlab.log({
                         "loss": loss.item(),
@@ -1134,9 +1174,11 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
                         "loss_action": loss_dict["loss_action"].item(),
                         "loss_video": loss_dict["loss_video"].item(),
                         "epoch": epoch_id,
+                        "micro_step": micro_step,
                         "learning_rate": optimizer.param_groups[0]["lr"],
                     }, step=global_step)
-                global_step += 1
+                if max_train_steps and global_step >= max_train_steps:
+                    break
 
         if save_steps is None:
             is_first = (epoch_id == start_epoch)
@@ -1145,6 +1187,8 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
                 model_logger.on_epoch_end(accelerator, model, epoch_id)
 
     model_logger.on_training_end(accelerator, model, save_steps)
+    if full_state_keep > 0 and global_step != last_state_step:
+        save_training_state()
     if accelerator.is_main_process:
         swanlab.finish()
 
@@ -1236,6 +1280,9 @@ def _build_parser():
                         choices=["on", "off"],
                         help="on=bell-shaped per-sample timestep loss weighting "
                              "on BOTH video & action losses; off=plain mean MSE.")
+
+    parser.add_argument("--max_train_steps", type=int, default=0,
+                        help="Stop after this many optimizer updates; 0 uses num_epochs.")
 
     # ---- LR schedule ----
     parser.add_argument("--lr_scheduler_type", type=str, default="cosine",
