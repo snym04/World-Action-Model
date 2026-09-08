@@ -2,10 +2,32 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import sys
 from pathlib import Path
+
+
+def _load_official_evaluator(repo_root):
+    """Execute the unchanged official Track-1 module without optional VLA imports.
+
+    VLABench.evaluation.__init__ eagerly imports OpenVLA/VLM dependencies.
+    base.py uses absolute core imports and does not require those registries.
+    No evaluator methods, task configuration or scoring logic are replaced.
+    """
+    source = Path(repo_root) / "VLABench/evaluation/evaluator/base.py"
+    if not source.is_file():
+        raise FileNotFoundError(f"Missing official evaluator: {source}")
+    spec = importlib.util.spec_from_file_location(
+        "_flowwam_vlabench_official_evaluator", source
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load official evaluator: {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Evaluator
 
 
 def _parse_args():
@@ -35,7 +57,7 @@ def main():
     os.environ["VLABENCH_ROOT"] = str(package_root)
     os.environ.setdefault("MUJOCO_GL", "egl")
 
-    from VLABench.evaluation.evaluator import Evaluator
+    Evaluator = _load_official_evaluator(repo_root)
     from vlabench_policy import FlowWAMVLABenchPolicy
 
     track_path = (
@@ -53,6 +75,16 @@ def main():
         raise ValueError("n-episodes exceeds the official track configuration")
 
     args.save_dir.mkdir(parents=True, exist_ok=True)
+    evaluator_source = package_root / "evaluation/evaluator/base.py"
+    (args.save_dir / "evaluator_provenance.json").write_text(
+        json.dumps({
+            "source": str(evaluator_source),
+            "sha256": hashlib.sha256(evaluator_source.read_bytes()).hexdigest(),
+            "track": str(track_path),
+            "track_sha256": hashlib.sha256(track_path.read_bytes()).hexdigest(),
+            "loader": "unchanged official base.py via spec_from_file_location",
+        }, indent=2), encoding="utf-8"
+    )
     policy = FlowWAMVLABenchPolicy(
         host=args.host, port=args.port, replan_steps=args.replan_steps
     )
