@@ -1,5 +1,6 @@
 """CPU unit check using the actual training loop extracted without Wan imports."""
 import ast
+from contextlib import nullcontext
 import json
 import math
 import os
@@ -72,15 +73,18 @@ def run(output, maximum, resume=None):
     assert logger.num_steps == maximum and maximum in logger.saved
     return model.weight.detach().clone(), state
 
-with tempfile.TemporaryDirectory(dir='/home/zmh/WAM/tmp', prefix='budget-unit-') as tmp:
+test_dir = os.environ.get('WAM_CPU_TEST_DIR')
+context = nullcontext(test_dir) if test_dir else tempfile.TemporaryDirectory(
+    dir='/home/zmh/WAM/tmp', prefix='budget-unit-')
+with context as tmp:
     base = Path(tmp)
     full, full_state = run(base/'full', 4)
     _, partial_state = run(base/'partial', 2)
     resumed, resumed_state = run(base/'resumed', 4, base/'partial/state/step-2')
     assert partial_state['micro_step'] == 4
-    assert full_state['micro_step'] == resumed_state['micro_step'] == 7
+    assert full_state['micro_step'] == resumed_state['micro_step'] == 8
     assert torch.allclose(full, resumed, atol=1e-7, rtol=0), (full, resumed)
     # Non-cadence final step must still produce full state.
     _, odd_state = run(base/'odd', 3)
-    assert odd_state['micro_step'] == 5
-print('PASS: optimizer budget, accumulation boundary, epoch-tail resume, final full state, identical resumed weights')
+    assert odd_state['micro_step'] == 6
+print('PASS: optimizer budget, accumulation boundary, padded-epoch resume, final full state, identical resumed weights')

@@ -958,6 +958,20 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         betas=(0.9, 0.95), foreach=False,
     )
 
+    # step_scheduler_with_optimizer=False + manual scheduler.step() on
+    # sync_gradients keeps the LR schedule correct under gradient accumulation.
+    accelerator = Accelerator(
+        gradient_accumulation_steps=grad_accum,
+        step_scheduler_with_optimizer=False,
+        kwargs_handlers=[DistributedDataParallelKwargs(
+            find_unused_parameters=find_unused)],
+    )
+
+    # ``device_specific=True`` needs an initialized AcceleratorState. Keep the
+    # identical pre-model seed in ``__main__`` so every rank constructs the
+    # same parameters, then switch runtime RNGs to deterministic per-rank seeds.
+    set_seed(args.seed, device_specific=True)
+
     cache_episode_batching = bool(
         args.load_from_cache and getattr(args, "cache_episode_batching", False)
     )
@@ -974,24 +988,23 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             collate_fn=dual_stream_action_collate_fn, num_workers=num_workers,
         )
     else:
+        sampler = None
+        if max_train_steps:
+            # Complete accumulation groups on every rank. RandomSampler first
+            # covers every record without replacement, then fills the small
+            # epoch tail from a fresh permutation. The manifest reports padding.
+            global_batch = args.batch_size * accelerator.num_processes * grad_accum
+            padded_samples = math.ceil(len(dataset) / global_batch) * global_batch
+            sampler = torch.utils.data.RandomSampler(
+                dataset, replacement=False, num_samples=padded_samples,
+                generator=shuffle_generator,
+            )
         dataloader = DataLoader(
-            dataset, shuffle=True, batch_size=args.batch_size, generator=shuffle_generator,
+            dataset, shuffle=sampler is None, sampler=sampler,
+            batch_size=args.batch_size, generator=shuffle_generator,
             collate_fn=dual_stream_action_collate_fn, num_workers=num_workers,
         )
 
-    # step_scheduler_with_optimizer=False + manual scheduler.step() on
-    # sync_gradients keeps the LR schedule correct under gradient accumulation.
-    accelerator = Accelerator(
-        gradient_accumulation_steps=grad_accum,
-        step_scheduler_with_optimizer=False,
-        kwargs_handlers=[DistributedDataParallelKwargs(
-            find_unused_parameters=find_unused)],
-    )
-
-    # ``device_specific=True`` needs an initialized AcceleratorState. Keep the
-    # identical pre-model seed in ``__main__`` so every rank constructs the
-    # same parameters, then switch runtime RNGs to deterministic per-rank seeds.
-    set_seed(args.seed, device_specific=True)
 
     # The dataloader here is the GLOBAL batch stream, so per-process optimizer
     # steps/epoch = ceil(len(dataloader) / (num_processes * grad_accum)). The
@@ -1027,6 +1040,8 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
     if not len(dataloader):
         raise ValueError("Empty training loader")
     if max_train_steps:
+        if len(dataloader) % grad_accum:
+            raise ValueError("Step-budget mode requires full accumulation groups; check cache sampler")
         num_epochs = math.ceil(max_train_steps / max(math.ceil(len(dataloader) / grad_accum), 1))
     skip_batches = 0
     global_step = start_epoch * math.ceil(len(dataloader) / grad_accum)
@@ -1073,6 +1088,8 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             "num_epochs": num_epochs, "start_epoch": start_epoch,
             "max_train_steps": max_train_steps, "step_unit": "optimizer_update",
             "effective_global_batch_size": args.batch_size * num_processes * grad_accum,
+            "dataset_records": len(dataset),
+            "samples_per_padded_epoch": len(dataloader) * args.batch_size * num_processes,
             "epoch_tail_batch_may_be_smaller": len(dataloader) % grad_accum != 0,
             "gradient_accumulation_steps": grad_accum,
             "num_frames": args.num_frames, "batch_size": args.batch_size,
