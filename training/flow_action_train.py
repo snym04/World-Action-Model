@@ -1070,6 +1070,11 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             print(f"[Resume-STATE] optimizer_step={global_step}, micro_step={micro_step}, "
                   f"start_epoch={start_epoch}, skip_batches={skip_batches}")
     model_logger.num_steps = global_step
+    # Checkpoints store optimizer state but not DDP gradient bucket views.
+    # Synchronize the first real resumed microbatch to establish views
+    # before no_sync accumulation; optimizer boundaries remain unchanged.
+    bootstrap_ddp_views = bool(resume_state_dir and isinstance(
+        model, torch.nn.parallel.DistributedDataParallel))
 
     def save_training_state():
         _save_full_state(accelerator, model_logger.output_path, global_step, full_state_keep,
@@ -1169,6 +1174,12 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
             active_loader = skip_first_batches(dataloader, skip_batches)
         for data in tqdm(active_loader, desc=f"Epoch {epoch_id}"):
             with accelerator.accumulate(model):
+                if bootstrap_ddp_views:
+                    model.require_backward_grad_sync = True
+                    model.require_forward_param_sync = True
+                    bootstrap_ddp_views = False
+                    if accelerator.is_main_process:
+                        print("[Resume-DDP] Bootstrap gradient bucket views on first microbatch")
                 loss_dict = model(data)
                 loss = loss_dict["loss"]
                 accelerator.backward(loss)
