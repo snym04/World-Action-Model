@@ -1175,7 +1175,8 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-                optimizer.zero_grad()
+                # Retain DDP bucket views across no_sync accumulation cycles.
+                optimizer.zero_grad(set_to_none=False)
                 micro_step += 1
                 if not accelerator.sync_gradients or accelerator.optimizer_step_was_skipped:
                     continue
