@@ -964,7 +964,9 @@ def launch_training_task(dataset, model, model_logger, start_epoch=0, args=None)
         gradient_accumulation_steps=grad_accum,
         step_scheduler_with_optimizer=False,
         kwargs_handlers=[DistributedDataParallelKwargs(
-            find_unused_parameters=find_unused)],
+            # Alias gradients to DDP buckets instead of storing a second copy.
+            # This preserves reductions/optimizer math and saves gradient-sized VRAM.
+            find_unused_parameters=find_unused, gradient_as_bucket_view=True)],
     )
 
     # ``device_specific=True`` needs an initialized AcceleratorState. Keep the
