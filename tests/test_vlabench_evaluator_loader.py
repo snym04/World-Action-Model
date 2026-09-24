@@ -21,6 +21,17 @@ class EvaluatorLoaderTest(unittest.TestCase):
             self.assertEqual(loader(root).sentinel, 42)
             self.assertEqual(source.read_bytes(), before)
 
+    def test_registries_imported_before_evaluator(self):
+        import ast
+        tree = ast.parse(ENTRY.read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        imports = {alias.name: node.lineno for node in ast.walk(main)
+                   if isinstance(node, ast.Import) for alias in node.names}
+        call = next(n for n in ast.walk(main) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name) and n.func.id == "_load_official_evaluator")
+        for module in ("VLABench.robots", "VLABench.tasks"):
+            self.assertLess(imports[module], call.lineno)
+
     def test_missing_source_is_an_error(self):
         loader = runpy.run_path(str(ENTRY))["_load_official_evaluator"]
         with tempfile.TemporaryDirectory() as tmp:

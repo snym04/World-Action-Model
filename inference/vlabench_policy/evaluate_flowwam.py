@@ -57,6 +57,10 @@ def main():
     os.environ["VLABENCH_ROOT"] = str(package_root)
     os.environ.setdefault("MUJOCO_GL", "egl")
 
+    # Match the official CLI: imports populate task and robot registries.
+    import VLABench.robots  # noqa: F401
+    import VLABench.tasks  # noqa: F401
+
     Evaluator = _load_official_evaluator(repo_root)
     from vlabench_policy import FlowWAMVLABenchPolicy
 
