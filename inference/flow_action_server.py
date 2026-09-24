@@ -503,6 +503,16 @@ def main():
     args = parse_args()
     if args.device == "cuda":
         args.device = "cuda:0"
+    # Optional fixed process RNG; default keeps upstream behavior for old runs.
+    inference_seed = os.environ.get("FLOWWAM_INFERENCE_SEED")
+    if inference_seed is not None:
+        import random
+        inference_seed = int(inference_seed)
+        random.seed(inference_seed)
+        np.random.seed(inference_seed)
+        torch.manual_seed(inference_seed)
+        torch.cuda.manual_seed_all(inference_seed)
+        log.info("Inference process RNG seed=%s; video seeds remain upstream 1/2", inference_seed)
     device = torch.device(args.device)
 
     if args.action_norm_path is None:

@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,22 @@ def _load_official_evaluator(repo_root):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.Evaluator
+
+
+def _validate_results(save_dir, tasks, n_episodes, result, visualization):
+    """Reject swallowed official-evaluator errors without changing its scoring."""
+    for task in tasks:
+        details = json.loads((save_dir / task / "detail_info.json").read_text())
+        if len(details) != n_episodes:
+            raise RuntimeError(f"{task}: expected {n_episodes} episodes, got {len(details)}")
+        for key in ("success_rate", "intention_score", "progress_score"):
+            if not math.isfinite(float(result[task][key])):
+                raise RuntimeError(f"{task}: nonfinite {key}")
+        if visualization:
+            for i in range(n_episodes):
+                videos = list((save_dir / task / "videos").glob(f"{i}_*.mp4"))
+                if len(videos) != 1 or videos[0].stat().st_size == 0:
+                    raise RuntimeError(f"{task}: missing/ambiguous video for episode {i}")
 
 
 def _parse_args():
@@ -105,9 +122,10 @@ def main():
         result = evaluator.evaluate(policy)
     finally:
         policy.close()
+    _validate_results(args.save_dir, tasks, args.n_episodes, result, args.visualization)
     result_path = args.save_dir / "evaluation_result.json"
     result_path.write_text(
-        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
     )
     print(json.dumps(result, ensure_ascii=False))
 
