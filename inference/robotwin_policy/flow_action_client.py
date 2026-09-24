@@ -11,6 +11,7 @@ Usage:
 """
 
 import logging
+import inspect
 import time
 from typing import Dict, Tuple
 
@@ -40,9 +41,13 @@ class FlowActionClient:
         log.info(f"Waiting for server at {self._uri} ...")
         while True:
             try:
+                # Sync keepalive kwargs exist only in newer websockets versions.
+                parameters = inspect.signature(websockets.sync.client.connect).parameters
+                keepalive = {k: None for k in ("ping_interval", "ping_timeout")
+                             if k in parameters}
                 conn = websockets.sync.client.connect(
                     self._uri, compression=None, max_size=None,
-                    ping_interval=None, ping_timeout=None,
+                    **keepalive,
                     close_timeout=None,
                 )
                 metadata = msgpack_numpy.unpackb(conn.recv())
